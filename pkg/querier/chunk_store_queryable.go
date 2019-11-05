@@ -3,12 +3,13 @@ package querier
 import (
 	"context"
 
-	"github.com/cortexproject/cortex/pkg/ingester/client"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/weaveworks/common/user"
+
+	"github.com/cortexproject/cortex/pkg/ingester/client"
 
 	"github.com/cortexproject/cortex/pkg/chunk"
 )
@@ -39,7 +40,7 @@ func (q *chunkStoreQuerier) Select(sp *storage.SelectParams, matchers ...*labels
 	if err != nil {
 		return nil, nil, err
 	}
-	chunks, err := q.store.Get(q.ctx, userID, model.Time(sp.Start), model.Time(sp.End), matchers...)
+	chunks, err := q.store.Get(q.ctx, userID, model.Time(sp.Start), model.Time(sp.End), matchers, nil)
 	if err != nil {
 		return nil, nil, promql.ErrStorage{Err: err}
 	}

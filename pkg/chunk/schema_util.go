@@ -7,11 +7,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
-	"fmt"
-
+	"github.com/cespare/xxhash"
 	"github.com/pkg/errors"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
@@ -23,6 +24,11 @@ func labelsString(ls labels.Labels) string {
 	if metricName != "" && len(ls) == 1 {
 		return metricName
 	}
+
+	if !sort.IsSorted(ls) {
+		sort.Sort(ls)
+	}
+
 	var b strings.Builder
 	b.Grow(1000)
 
@@ -56,6 +62,13 @@ func labelsSeriesID(ls labels.Labels) []byte {
 func sha256bytes(s string) []byte {
 	h := sha256.Sum256([]byte(s))
 	return encodeBase64Bytes(h[:])
+}
+
+func xxhashString(s string) (uint64, string) {
+	// 高进制会使转换成string需要迭代的次数更少，并且能得到更短的字符串
+	// 2*64-1 => '3w5e11264sg00'，从20位降到了13位
+	n := xxhash.Sum64String(s)
+	return n, strconv.FormatUint(n, 36)
 }
 
 func encodeRangeKey(ss ...[]byte) []byte {
@@ -188,8 +201,6 @@ func parseChunkTimeRangeValue(rangeValue []byte, value []byte) (
 	// v3 schema had four components - label name, label value, chunk ID and version.
 	// "version" is 1 and label value is base64 encoded.
 	// (older code wrote "version" as 1, not '1')
-	case bytes.Equal(components[3], chunkTimeRangeKeyV1a):
-		fallthrough
 	case bytes.Equal(components[3], chunkTimeRangeKeyV1):
 		chunkID = string(components[2])
 		labelValue, err = decodeBase64Value(components[1])
@@ -235,4 +246,63 @@ func parseChunkTimeRangeValue(rangeValue []byte, value []byte) (
 		err = fmt.Errorf("unrecognised chunkTimeRangeKey version: '%v'", string(components[3]))
 		return
 	}
+}
+
+type LokiIndexInfo struct {
+	Shard      string
+	Version    string
+	UserID     string
+	TimeRange  string
+	IndexType  string
+	LabelName  string
+	LabelValue string
+	LabelHash  string
+	TagName    string
+	TagValue   string
+	TagHash    string
+	StreamID   []byte
+	ChunkID    []byte
+}
+
+func ParseLokiIndexEntry(e *IndexEntry) *LokiIndexInfo {
+	if e == nil {
+		return nil
+	}
+	result := &LokiIndexInfo{}
+
+	// TODO version
+	fields := strings.Split(e.HashValue, ":")
+	result.Version = fields[0]
+
+	if result.Version == "1" {
+		result.UserID = fields[1]
+		result.TimeRange = fields[2]
+		result.IndexType = fields[3]
+		switch result.IndexType {
+		case LokiEntryKindLabelNames:
+			result.LabelName = string(e.RangeValue)
+		case LokiEntryKindLabelName2Values:
+			result.Shard = fields[4]
+			result.LabelName = fields[5]
+			result.LabelValue = string(e.RangeValue)
+		case LokiEntryKindLabelHash2StreamChunkIDs:
+			result.LabelHash = fields[4]
+			ids := decodeRangeKey(e.RangeValue)
+			result.StreamID = ids[0]
+			result.ChunkID = ids[1]
+		case LokiEntryKindStreamID2ChunkIDs:
+			result.StreamID = []byte(fields[4])
+			result.ChunkID = e.RangeValue
+		case LokiEntryKindTagNames:
+			result.TagName = string(e.RangeValue)
+		case LokiEntryKindTagHash2ChunkIDs:
+			result.TagHash = fields[4]
+			result.ChunkID = e.RangeValue
+		case LokiEntryKindTagName2Values:
+			result.Shard = fields[4]
+			result.TagName = fields[5]
+			result.TagValue = string(e.RangeValue)
+		}
+	}
+	return result
 }

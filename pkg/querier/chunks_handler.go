@@ -54,7 +54,7 @@ func ChunksHandler(queryable storage.Queryable) http.Handler {
 			return
 		}
 
-		chunks, err := store.Get(r.Context(), userID, model.Time(mint), model.Time(maxt), matchers...)
+		chunks, err := store.Get(r.Context(), userID, model.Time(mint), model.Time(maxt), matchers, nil)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

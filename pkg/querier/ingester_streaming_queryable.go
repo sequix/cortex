@@ -9,10 +9,11 @@ import (
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/storage"
 
+	"github.com/weaveworks/common/user"
+
 	"github.com/cortexproject/cortex/pkg/chunk"
 	"github.com/cortexproject/cortex/pkg/ingester/client"
 	"github.com/cortexproject/cortex/pkg/util/chunkcompat"
-	"github.com/weaveworks/common/user"
 )
 
 func newIngesterStreamingQueryable(distributor Distributor, chunkIteratorFunc chunkIteratorFunc) *ingesterQueryable {
@@ -40,8 +41,12 @@ func (i ingesterQueryable) Querier(ctx context.Context, mint, maxt int64) (stora
 	}, nil
 }
 
-// Get implements ChunkStore.
-func (i ingesterQueryable) Get(ctx context.Context, userID string, from, through model.Time, matchers ...*labels.Matcher) ([]chunk.Chunk, error) {
+type ingesterStreamingQuerier struct {
+	chunkIteratorFunc chunkIteratorFunc
+	distributorQuerier
+}
+
+func (i ingesterQueryable) Get(ctx context.Context, userID string, from, through model.Time, matchers []*labels.Matcher, tags []*chunk.TagMatcher) ([]chunk.Chunk, error) {
 	results, err := i.distributor.QueryStream(ctx, from, through, matchers...)
 	if err != nil {
 		return nil, promql.ErrStorage{Err: err}
@@ -63,11 +68,6 @@ func (i ingesterQueryable) Get(ctx context.Context, userID string, from, through
 	}
 
 	return chunks, nil
-}
-
-type ingesterStreamingQuerier struct {
-	chunkIteratorFunc chunkIteratorFunc
-	distributorQuerier
 }
 
 func (q *ingesterStreamingQuerier) Select(sp *storage.SelectParams, matchers ...*labels.Matcher) (storage.SeriesSet, storage.Warnings, error) {

@@ -56,3 +56,58 @@ func (ts Tags) Equals(other Tags) bool {
 
 	return true
 }
+
+// Following is a different tag than above one.
+//
+// Tag represents a high-cardinality KV label.
+// It does not participate the computation of the streamID,
+// so it will not affect the granularity of the aggregation of chunks.
+//
+// Tag will store a different index entry, it points to the chunk
+// which contains the log line which has the tag.
+//
+// When performing a query, tag will be used to determine which chunk
+// to look at, and it will return a Filter func just like any other Filter.
+// And you should use it to filter the lines within that chunk.
+type TagMatcher struct {
+	Name  string
+	Value string
+}
+
+func (t *TagMatcher) String() string {
+	return fmt.Sprintf("%s=%q", t.Name, t.Value)
+}
+
+func (t *TagMatcher) Matches(s string) bool {
+	return strings.Contains(s, t.Value)
+}
+
+// tagName -> tagValues
+type TagMatchers map[string][]string
+
+func (t TagMatchers) Flat() []TagMatcher {
+	result := make([]TagMatcher, 0, len(t))
+	for n, vs := range t {
+		for _, v := range vs {
+			result = append(result, TagMatcher{
+				Name:  n,
+				Value: v,
+			})
+		}
+	}
+	return result
+}
+
+func (t TagMatchers) AppendString(s string) {
+	s = strings.Trim(s, "/")
+	KVs := strings.Split(s, ",")
+	for _, kv := range KVs {
+		kv2 := strings.SplitN(kv, "=", 2)
+		if len(kv2) != 2 {
+			continue
+		}
+		tagName := kv2[0]
+		tagValue := strings.Trim(kv2[1], `"`)
+		t[tagName] = append(t[tagName], tagValue)
+	}
+}

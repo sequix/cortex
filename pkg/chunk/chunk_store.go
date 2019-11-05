@@ -17,16 +17,22 @@ import (
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/promql"
 
+	"github.com/weaveworks/common/httpgrpc"
+
 	"github.com/cortexproject/cortex/pkg/chunk/cache"
 	"github.com/cortexproject/cortex/pkg/util"
 	"github.com/cortexproject/cortex/pkg/util/extract"
 	"github.com/cortexproject/cortex/pkg/util/flagext"
 	"github.com/cortexproject/cortex/pkg/util/spanlogger"
 	"github.com/cortexproject/cortex/pkg/util/validation"
-	"github.com/weaveworks/common/httpgrpc"
 )
 
 var (
+	indexEntriesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "cortex",
+		Name:      "chunk_store_index_entries_total",
+		Help:      "Number of index entries.",
+	})
 	indexEntriesPerChunk = promauto.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "cortex",
 		Name:      "chunk_store_index_entries_per_chunk",
@@ -45,12 +51,15 @@ type StoreConfig struct {
 	ChunkCacheConfig       cache.Config `yaml:"chunk_cache_config,omitempty"`
 	WriteDedupeCacheConfig cache.Config `yaml:"write_dedupe_cache_config,omitempty"`
 
+	// 至少多少时间后将一个chunk发给store
 	MinChunkAge           time.Duration `yaml:"min_chunk_age,omitempty"`
 	CacheLookupsOlderThan time.Duration `yaml:"cache_lookups_older_than,omitempty"`
 
+	// 一个query能看到的最早的时间窗口
 	// Limits query start time to be greater than now() - MaxLookBackPeriod, if set.
 	MaxLookBackPeriod time.Duration `yaml:"max_look_back_period"`
 
+	// 只cache chunk的external key
 	// Not visible in yaml because the setting shouldn't be common between ingesters and queriers
 	chunkCacheStubs bool // don't write the full chunk to cache, just a stub entry
 }
@@ -79,6 +88,14 @@ type store struct {
 	schema Schema
 	limits StoreLimits
 	*Fetcher
+}
+
+func (c *store) TagNames(ctx context.Context, userID string, from, through model.Time) ([]string, error) {
+	return nil, ErrNotSupported
+}
+
+func (c *store) TagValues(ctx context.Context, userID string, from, through model.Time, tagName string) ([]string, error) {
+	return nil, ErrNotSupported
 }
 
 func newStore(cfg StoreConfig, schema Schema, index IndexClient, chunks ObjectClient, limits StoreLimits) (Store, error) {
@@ -141,10 +158,11 @@ func (c *store) calculateIndexEntries(userID string, from, through model.Time, c
 		return nil, fmt.Errorf("no MetricNameLabel for chunk")
 	}
 
-	entries, err := c.schema.GetWriteEntries(from, through, userID, metricName, chunk.Metric, chunk.ExternalKey())
+	entries, err := c.schema.GetWriteEntries(from, through, userID, metricName, chunk.Metric, chunk.Tags, chunk.ExternalKey())
 	if err != nil {
 		return nil, err
 	}
+	indexEntriesTotal.Add(float64(len(entries)))
 	indexEntriesPerChunk.Observe(float64(len(entries)))
 
 	// Remove duplicate entries based on tableName:hashValue:rangeValue
@@ -160,7 +178,7 @@ func (c *store) calculateIndexEntries(userID string, from, through model.Time, c
 }
 
 // Get implements Store
-func (c *store) Get(ctx context.Context, userID string, from, through model.Time, allMatchers ...*labels.Matcher) ([]Chunk, error) {
+func (c *store) Get(ctx context.Context, userID string, from, through model.Time, allMatchers []*labels.Matcher, allTags []*TagMatcher) ([]Chunk, error) {
 	log, ctx := spanlogger.New(ctx, "ChunkStore.Get")
 	defer log.Span.Finish()
 	level.Debug(log).Log("from", from, "through", through, "matchers", len(allMatchers))
@@ -177,7 +195,7 @@ func (c *store) Get(ctx context.Context, userID string, from, through model.Time
 	return c.getMetricNameChunks(ctx, userID, from, through, matchers, metricName)
 }
 
-func (c *store) GetChunkRefs(ctx context.Context, userID string, from, through model.Time, allMatchers ...*labels.Matcher) ([][]Chunk, []*Fetcher, error) {
+func (c *store) GetChunkRefs(ctx context.Context, userID string, from, through model.Time, allMatchers []*labels.Matcher, allTags []*TagMatcher) ([][]Chunk, []*Fetcher, error) {
 	return nil, nil, errors.New("not implemented")
 }
 

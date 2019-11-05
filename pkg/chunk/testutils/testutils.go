@@ -5,10 +5,11 @@ import (
 	"strconv"
 	"time"
 
-	promchunk "github.com/cortexproject/cortex/pkg/chunk/encoding"
-	"github.com/cortexproject/cortex/pkg/util/flagext"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
+
+	promchunk "github.com/cortexproject/cortex/pkg/chunk/encoding"
+	"github.com/cortexproject/cortex/pkg/util/flagext"
 
 	"github.com/cortexproject/cortex/pkg/chunk"
 	"github.com/cortexproject/cortex/pkg/ingester/client"
@@ -78,6 +79,7 @@ func dummyChunkFor(now model.Time, metric labels.Labels) chunk.Chunk {
 		userID,
 		client.Fingerprint(metric),
 		metric,
+		nil,
 		cs,
 		now.Add(-time.Hour),
 		now,

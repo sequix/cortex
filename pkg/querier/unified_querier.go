@@ -54,7 +54,7 @@ func (q *unifiedChunkQuerier) Get(ctx context.Context, userID string, from, thro
 	errs := make(chan error, len(q.stores))
 	for _, store := range q.stores {
 		go func(store ChunkStore) {
-			cs, err := store.Get(ctx, userID, from, through, matchers...)
+			cs, err := store.Get(ctx, userID, from, through, matchers, nil)
 			if err != nil {
 				errs <- err
 			} else {

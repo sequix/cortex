@@ -13,7 +13,6 @@ import (
 )
 
 var (
-	chunkTimeRangeKeyV1a = []byte{1}
 	chunkTimeRangeKeyV1  = []byte{'1'}
 	chunkTimeRangeKeyV2  = []byte{'2'}
 	chunkTimeRangeKeyV3  = []byte{'3'}
@@ -35,7 +34,7 @@ var (
 // to write or read chunks from the external index.
 type Schema interface {
 	// When doing a write, use this method to return the list of entries you should write to.
-	GetWriteEntries(from, through model.Time, userID string, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error)
+	GetWriteEntries(from, through model.Time, userID string, metricName string, labels labels.Labels, tags TagMatchers, chunkID string) ([]IndexEntry, error)
 
 	// Should only be used with the seriesStore. TODO: Make seriesStore implement a different interface altogether.
 	// returns cache key string and []IndexEntry per bucket, matched in order
@@ -43,9 +42,27 @@ type Schema interface {
 	GetChunkWriteEntries(from, through model.Time, userID string, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error)
 
 	// When doing a read, use these methods to return the list of entries you should query
+
+	// labelNames
 	GetReadQueriesForMetric(from, through model.Time, userID string, metricName string) ([]IndexQuery, error)
+
+	// labelName => labelValues
 	GetReadQueriesForMetricLabel(from, through model.Time, userID string, metricName string, labelName string) ([]IndexQuery, error)
+
+	// hash(labelName, labelValue) => chunkID
 	GetReadQueriesForMetricLabelValue(from, through model.Time, userID string, metricName string, labelName string, labelValue string) ([]IndexQuery, error)
+
+	// tagNames
+	GetReadQueriesForTagName(from, through model.Time, userID string) ([]IndexQuery, error)
+
+	// tagName => tagValues
+	GetReadQueriesForTagValue(from, through model.Time, userID string, tagName string) ([]IndexQuery, error)
+
+	// hash(tagName,tagValue) => chunkIDs
+	GetReadQueriesForTagHash(from, through model.Time, userID string, tagName, tagValue string) ([]IndexQuery, error)
+
+	// hash(tagName, tagValue) => chunkIDs
+	GetReadQueriesForChunksFromTagHash(from, through model.Time, userID string, tagName, tagValue string) ([]IndexQuery, error)
 
 	// If the query resulted in series IDs, use this method to find chunks.
 	GetChunksForSeries(from, through model.Time, userID string, seriesID []byte) ([]IndexQuery, error)
@@ -72,6 +89,10 @@ type IndexQuery struct {
 	Immutable bool
 }
 
+func (iq IndexQuery) String() string {
+	return iq.TableName + ":" + iq.HashValue + ":" + string(iq.RangeValuePrefix)
+}
+
 // IndexEntry describes an entry in the chunk index
 type IndexEntry struct {
 	TableName string
@@ -92,11 +113,11 @@ type schema struct {
 	entries entries
 }
 
-func (s schema) GetWriteEntries(from, through model.Time, userID string, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (s schema) GetWriteEntries(from, through model.Time, userID string, metricName string, labels labels.Labels, tags TagMatchers, chunkID string) ([]IndexEntry, error) {
 	var result []IndexEntry
 
 	for _, bucket := range s.buckets(from, through, userID) {
-		entries, err := s.entries.GetWriteEntries(bucket, metricName, labels, chunkID)
+		entries, err := s.entries.GetWriteEntries(bucket, metricName, labels, tags, chunkID)
 		if err != nil {
 			return nil, err
 		}
@@ -216,14 +237,70 @@ func (s schema) GetLabelNamesForSeries(from, through model.Time, userID string, 
 	return result, nil
 }
 
+func (s schema) GetReadQueriesForTagName(from, through model.Time, userID string) ([]IndexQuery, error) {
+	var result []IndexQuery
+	for _, bucket := range s.buckets(from, through, userID) {
+		entries, err := s.entries.GetReadMetricTagNameQueries(bucket)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, entries...)
+	}
+	return result, nil
+}
+
+func (s schema) GetReadQueriesForTagValue(from, through model.Time, userID string, tagName string) ([]IndexQuery, error) {
+	var result []IndexQuery
+	for _, bucket := range s.buckets(from, through, userID) {
+		entries, err := s.entries.GetReadMetricTagValueQueries(bucket, tagName)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, entries...)
+	}
+	return result, nil
+}
+
+func (s schema) GetReadQueriesForTagHash(from, through model.Time, userID string, tagName, tagValue string) ([]IndexQuery, error) {
+	var result []IndexQuery
+	for _, bucket := range s.buckets(from, through, userID) {
+		entries, err := s.entries.GetReadMetricTagHashQueries(bucket, tagName, tagValue)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, entries...)
+	}
+	return result, nil
+}
+
+func (s schema) GetReadQueriesForChunksFromTagHash(from, through model.Time, userID string, tagName, tagValue string) ([]IndexQuery, error) {
+	panic("implement me")
+}
+
 type entries interface {
-	GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error)
+	// Loki schema中只使用该接口，用于生成所有的entries
+	GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, tags TagMatchers, chunkID string) ([]IndexEntry, error)
 	GetLabelWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error)
 	GetChunkWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error)
 
+	// get all label names
 	GetReadMetricQueries(bucket Bucket, metricName string) ([]IndexQuery, error)
+
+	// get all label values under specific labelName
 	GetReadMetricLabelQueries(bucket Bucket, metricName string, labelName string) ([]IndexQuery, error)
+
+	// get all streamIDs by specific label
 	GetReadMetricLabelValueQueries(bucket Bucket, metricName string, labelName string, labelValue string) ([]IndexQuery, error)
+
+	// get all tag names
+	GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error)
+
+	// get all tag values under specific tagName
+	GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error)
+
+	// get all chunkIDs by specific tag
+	GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error)
+
 	GetChunksForSeries(bucket Bucket, seriesID []byte) ([]IndexQuery, error)
 	GetLabelNamesForSeries(bucket Bucket, seriesID []byte) ([]IndexQuery, error)
 }
@@ -234,7 +311,19 @@ type entries interface {
 
 type originalEntries struct{}
 
-func (originalEntries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (originalEntries) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (originalEntries) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (originalEntries) GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (originalEntries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, _ TagMatchers, chunkID string) ([]IndexEntry, error) {
 	chunkIDBytes := []byte(chunkID)
 	result := []IndexEntry{}
 	for _, v := range labels {
@@ -308,7 +397,15 @@ type base64Entries struct {
 	originalEntries
 }
 
-func (base64Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (base64Entries) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (base64Entries) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (base64Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, _ TagMatchers, chunkID string) ([]IndexEntry, error) {
 	chunkIDBytes := []byte(chunkID)
 	result := []IndexEntry{}
 	for _, v := range labels {
@@ -351,7 +448,19 @@ func (base64Entries) GetReadMetricLabelValueQueries(bucket Bucket, metricName st
 //    - range key: \0\0<chunk name>\0<version 3>
 type labelNameInHashKeyEntries struct{}
 
-func (labelNameInHashKeyEntries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (labelNameInHashKeyEntries) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (labelNameInHashKeyEntries) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (labelNameInHashKeyEntries) GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (labelNameInHashKeyEntries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, _ TagMatchers, chunkID string) ([]IndexEntry, error) {
 	chunkIDBytes := []byte(chunkID)
 	entries := []IndexEntry{
 		{
@@ -425,7 +534,19 @@ func (labelNameInHashKeyEntries) GetLabelNamesForSeries(_ Bucket, _ []byte) ([]I
 // so the chunk end times are ignored.
 type v5Entries struct{}
 
-func (v5Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (v5Entries) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v5Entries) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v5Entries) GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v5Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, _ TagMatchers, chunkID string) ([]IndexEntry, error) {
 	chunkIDBytes := []byte(chunkID)
 	encodedThroughBytes := encodeTime(bucket.through)
 
@@ -498,7 +619,19 @@ func (v5Entries) GetLabelNamesForSeries(_ Bucket, _ []byte) ([]IndexQuery, error
 // moves label value out of range key (see #199).
 type v6Entries struct{}
 
-func (v6Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (v6Entries) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v6Entries) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v6Entries) GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v6Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, _ TagMatchers, chunkID string) ([]IndexEntry, error) {
 	chunkIDBytes := []byte(chunkID)
 	encodedThroughBytes := encodeTime(bucket.through)
 
@@ -575,10 +708,21 @@ func (v6Entries) GetLabelNamesForSeries(_ Bucket, _ []byte) ([]IndexQuery, error
 }
 
 // v9Entries adds a layer of indirection between labels -> series -> chunks.
-type v9Entries struct {
+type v9Entries struct{}
+
+func (v9Entries) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
 }
 
-func (v9Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (v9Entries) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v9Entries) GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v9Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, _ TagMatchers, chunkID string) ([]IndexEntry, error) {
 	return nil, ErrNotSupported
 }
 
@@ -678,7 +822,19 @@ type v10Entries struct {
 	rowShards uint32
 }
 
-func (v10Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+func (v10Entries) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v10Entries) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v10Entries) GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+func (v10Entries) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, _ TagMatchers, chunkID string) ([]IndexEntry, error) {
 	return nil, ErrNotSupported
 }
 
@@ -845,4 +1001,206 @@ func (v11Entries) GetLabelNamesForSeries(bucket Bucket, seriesID []byte) ([]Inde
 			HashValue: string(seriesID),
 		},
 	}, nil
+}
+
+// 除chunkID外所有的字段都是固定长度的，其目的在于只使用一个排序键就能完成所有的查询
+//
+// HashKey: <version>:<userID>:<timeRange>:L
+// RangeKey: <labelName>
+//
+// HashKey: <version>:<userID>:<timeRange>:N:<labelName>
+// RangeKey: <labelValue>
+//
+// HashKey: <version>:<userID>:<timeRange>:V:<hash(labelName,labelValue)>
+// RangeKey: <streamID>\x00<chunkID>
+//
+// TODO 给chunkID索引加上时间范围
+// HashKey: <version>:<userID>:<timeRange>:S:<streamID>
+// RangeKey: <chunkID>
+//
+// HashKey: <version>:<userID>:<timeRange>:T
+// RangeKey: <tagName>
+//
+// HashKey: <version>:<userID>:<timeRange>:Z:<shard>:<tagName>
+// RangeKey: <tagValue>
+//
+// HashKey: <version>:<userID>:<timeRange>:H:<hash(tagName,tagValue)>
+// RangeKey: <streamID>
+type lokiEntriesV1 struct {
+	rowShards uint64
+}
+
+func (lokiEntriesV1) GetLabelNamesForSeries(bucket Bucket, seriesID []byte) ([]IndexQuery, error) {
+	return nil, ErrNotSupported
+}
+
+const (
+	LokiSeparator     = "\x00"
+	LokiSeparatorNext = "\x01"
+)
+
+const (
+	LokiEntryKindLabelNames               = "L"
+	LokiEntryKindLabelName2Values         = "N"
+	LokiEntryKindLabelHash2StreamChunkIDs = "V"
+	LokiEntryKindStreamID2ChunkIDs        = "S"
+	LokiEntryKindTagNames                 = "T"
+	LokiEntryKindTagName2Values           = "Z"
+	LokiEntryKindTagHash2ChunkIDs         = "H"
+)
+
+func (e lokiEntriesV1) GetWriteEntries(bucket Bucket, metricName string, labels labels.Labels, tags TagMatchers, chunkID string) ([]IndexEntry, error) {
+	var (
+		chunkIDBytes = []byte(chunkID)
+		streamID     = labelsSeriesID(labels)
+		entries      = make([]IndexEntry, 0, 1+3*(len(labels)+len(tags)))
+	)
+
+	// HashKey: <version>:<userID>:<timeRange>:S:<streamID>
+	// RangeKey: <chunkID>
+	entries = append(entries, IndexEntry{
+		HashValue:  "1:" + bucket.hashKey + ":" + LokiEntryKindStreamID2ChunkIDs + ":" + string(streamID),
+		RangeValue: []byte(chunkID),
+	})
+
+	for i := range labels {
+		lb := &labels[i]
+
+		if lb.Name == model.MetricNameLabel {
+			continue
+		}
+		_, lbHash := xxhashString(lb.Name + LokiSeparator + lb.Value)
+
+		// HashKey: <version>:<userID>:<timeRange>:L
+		// RangeKey: <labelName>
+		entries = append(entries, IndexEntry{
+			HashValue:  "1:" + bucket.hashKey + ":" + LokiEntryKindLabelNames,
+			RangeValue: []byte(lb.Name),
+		})
+
+		// HashKey: <version>:<userID>:<timeRange>:N:<labelName>
+		// RangeKey: <labelValue>
+		entries = append(entries, IndexEntry{
+			HashValue:  "1:" + bucket.hashKey + ":" + LokiEntryKindLabelName2Values + ":" + lb.Name,
+			RangeValue: []byte(lb.Value),
+		})
+
+		// HashKey: <version>:<userID>:<timeRange>:V:<hash(labelName,labelValue)>
+		// RangeKey: <streamID>
+		entries = append(entries, IndexEntry{
+			HashValue:  "1:" + bucket.hashKey + ":" + LokiEntryKindLabelHash2StreamChunkIDs + ":" + lbHash,
+			RangeValue: encodeRangeKey(streamID, chunkIDBytes),
+		})
+	}
+
+	for tagName, tagValues := range tags {
+		// HashKey: <version>:<userID>:<timeRange>:T
+		// RangeKey: <tagName>
+		entries = append(entries, IndexEntry{
+			HashValue:  "1:" + bucket.hashKey + ":" + LokiEntryKindTagNames,
+			RangeValue: []byte(tagName),
+		})
+
+		for _, tagValue := range tagValues {
+			tagHashInt, tagHash := xxhashString(tagName + LokiSeparator + tagValue)
+			shard := fmt.Sprintf("%02d", tagHashInt%e.rowShards)
+
+			// HashKey: <version>:<userID>:<timeRange>:Z:<shard>:<tagName>
+			// RangeKey: <tagValue>
+			entries = append(entries, IndexEntry{
+				HashValue:  "1:" + bucket.hashKey + ":" + LokiEntryKindTagName2Values + ":" + shard + ":" + tagName,
+				RangeValue: []byte(tagValue),
+			})
+
+			// HashKey: <version>:<userID>:<timeRange>:H:<hash(tagName,tagValue)>
+			// RangeKey: <chunkID>
+			entries = append(entries, IndexEntry{
+				HashValue:  "1:" + bucket.hashKey + ":" + LokiEntryKindTagHash2ChunkIDs + ":" + tagHash,
+				RangeValue: chunkIDBytes,
+			})
+
+		}
+	}
+	return entries, nil
+}
+
+func (lokiEntriesV1) GetLabelWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+	return nil, ErrNotSupported
+}
+
+func (lokiEntriesV1) GetChunkWriteEntries(bucket Bucket, metricName string, labels labels.Labels, chunkID string) ([]IndexEntry, error) {
+	return nil, ErrNotSupported
+}
+
+// get all label names
+func (lokiEntriesV1) GetReadMetricQueries(bucket Bucket, metricName string) ([]IndexQuery, error) {
+	queries := []IndexQuery{
+		{
+			HashValue: "1:" + bucket.hashKey + ":" + LokiEntryKindLabelNames,
+		},
+	}
+	return queries, nil
+}
+
+// get all label values under specific labelName
+func (e lokiEntriesV1) GetReadMetricLabelQueries(bucket Bucket, metricName string, labelName string) ([]IndexQuery, error) {
+	queries := []IndexQuery{
+		{
+			HashValue: "1:" + bucket.hashKey + ":" + LokiEntryKindLabelName2Values + ":" + labelName,
+		},
+	}
+	return queries, nil
+}
+
+// get all streamIDs by specific label
+func (lokiEntriesV1) GetReadMetricLabelValueQueries(bucket Bucket, metricName string, labelName string, labelValue string) ([]IndexQuery, error) {
+	_, labelHash := xxhashString(labelName + LokiSeparator + labelValue)
+	queries := []IndexQuery{
+		{
+			HashValue: "1:" + bucket.hashKey + ":" + LokiEntryKindLabelHash2StreamChunkIDs + ":" + labelHash,
+		},
+	}
+	return queries, nil
+}
+
+// get all tag names
+func (e lokiEntriesV1) GetReadMetricTagNameQueries(bucket Bucket) ([]IndexQuery, error) {
+	queries := []IndexQuery{
+		{
+			HashValue: "1:" + bucket.hashKey + ":" + LokiEntryKindTagNames,
+		},
+	}
+	return queries, nil
+}
+
+// get all tag values under specific tagName
+func (e lokiEntriesV1) GetReadMetricTagValueQueries(bucket Bucket, tagName string) ([]IndexQuery, error) {
+	queries := make([]IndexQuery, 0, e.rowShards)
+	for i := uint64(0); i < e.rowShards; i++ {
+		shard := fmt.Sprintf("%02d", i)
+		queries = append(queries, IndexQuery{
+			HashValue: "1:" + bucket.hashKey + ":" + LokiEntryKindTagName2Values + ":" + shard + ":" + tagName,
+		})
+	}
+	return queries, nil
+}
+
+// get all tag values under specific tagName
+func (lokiEntriesV1) GetReadMetricTagHashQueries(bucket Bucket, tagName, tagValue string) ([]IndexQuery, error) {
+	_, tagHash := xxhashString(tagName + LokiSeparator + tagValue)
+	queries := []IndexQuery{
+		{
+			HashValue: "1:" + bucket.hashKey + ":" + LokiEntryKindTagHash2ChunkIDs + ":" + tagHash,
+		},
+	}
+	return queries, nil
+}
+
+func (lokiEntriesV1) GetChunksForSeries(bucket Bucket, streamID []byte) ([]IndexQuery, error) {
+	queries := []IndexQuery{
+		{
+			HashValue: "1:" + bucket.hashKey + ":" + LokiEntryKindStreamID2ChunkIDs + ":" + string(streamID),
+		},
+	}
+	return queries, nil
 }

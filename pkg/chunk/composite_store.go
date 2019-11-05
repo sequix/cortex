@@ -19,12 +19,14 @@ type StoreLimits interface {
 type Store interface {
 	Put(ctx context.Context, chunks []Chunk) error
 	PutOne(ctx context.Context, from, through model.Time, chunk Chunk) error
-	Get(ctx context.Context, userID string, from, through model.Time, matchers ...*labels.Matcher) ([]Chunk, error)
+	Get(ctx context.Context, userID string, from, through model.Time, matchers []*labels.Matcher, tags []*TagMatcher) ([]Chunk, error)
 	// GetChunkRefs returns the un-loaded chunks and the fetchers to be used to load them. You can load each slice of chunks ([]Chunk),
 	// using the corresponding Fetcher (fetchers[i].FetchChunks(ctx, chunks[i], ...)
-	GetChunkRefs(ctx context.Context, userID string, from, through model.Time, matchers ...*labels.Matcher) ([][]Chunk, []*Fetcher, error)
+	GetChunkRefs(ctx context.Context, userID string, from, through model.Time, matchers []*labels.Matcher, tags []*TagMatcher) ([][]Chunk, []*Fetcher, error)
 	LabelValuesForMetricName(ctx context.Context, userID string, from, through model.Time, metricName string, labelName string) ([]string, error)
 	LabelNamesForMetricName(ctx context.Context, userID string, from, through model.Time, metricName string) ([]string, error)
+	TagNames(ctx context.Context, userID string, from, through model.Time) ([]string, error)
+	TagValues(ctx context.Context, userID string, from, through model.Time, tagName string) ([]string, error)
 	Stop()
 }
 
@@ -57,6 +59,8 @@ func (c *CompositeStore) AddPeriod(storeCfg StoreConfig, cfg PeriodConfig, index
 	switch cfg.Schema {
 	case "v9", "v10", "v11":
 		store, err = newSeriesStore(storeCfg, schema, index, chunks, limits)
+	case "loki":
+		store, err = newLokiStore(storeCfg, schema, index, chunks, limits)
 	default:
 		store, err = newStore(storeCfg, schema, index, chunks, limits)
 	}
@@ -85,10 +89,10 @@ func (c compositeStore) PutOne(ctx context.Context, from, through model.Time, ch
 	})
 }
 
-func (c compositeStore) Get(ctx context.Context, userID string, from, through model.Time, matchers ...*labels.Matcher) ([]Chunk, error) {
+func (c compositeStore) Get(ctx context.Context, userID string, from, through model.Time, matchers []*labels.Matcher, tags []*TagMatcher) ([]Chunk, error) {
 	var results []Chunk
 	err := c.forStores(from, through, func(from, through model.Time, store Store) error {
-		chunks, err := store.Get(ctx, userID, from, through, matchers...)
+		chunks, err := store.Get(ctx, userID, from, through, matchers, tags)
 		if err != nil {
 			return err
 		}
@@ -126,11 +130,37 @@ func (c compositeStore) LabelNamesForMetricName(ctx context.Context, userID stri
 	return result, err
 }
 
-func (c compositeStore) GetChunkRefs(ctx context.Context, userID string, from, through model.Time, matchers ...*labels.Matcher) ([][]Chunk, []*Fetcher, error) {
+func (c compositeStore) TagNames(ctx context.Context, userID string, from, through model.Time) ([]string, error) {
+	var result []string
+	err := c.forStores(from, through, func(from, through model.Time, store Store) error {
+		tagNames, err := store.TagNames(ctx, userID, from, through)
+		if err != nil {
+			return err
+		}
+		result = append(result, tagNames...)
+		return nil
+	})
+	return result, err
+}
+
+func (c compositeStore) TagValues(ctx context.Context, userID string, from, through model.Time, tagName string) ([]string, error) {
+	var result []string
+	err := c.forStores(from, through, func(from, through model.Time, store Store) error {
+		tagValues, err := store.TagValues(ctx, userID, from, through, tagName)
+		if err != nil {
+			return err
+		}
+		result = append(result, tagValues...)
+		return nil
+	})
+	return result, err
+}
+
+func (c compositeStore) GetChunkRefs(ctx context.Context, userID string, from, through model.Time, matchers []*labels.Matcher, tags []*TagMatcher) ([][]Chunk, []*Fetcher, error) {
 	chunkIDs := [][]Chunk{}
 	fetchers := []*Fetcher{}
 	err := c.forStores(from, through, func(from, through model.Time, store Store) error {
-		ids, fetcher, err := store.GetChunkRefs(ctx, userID, from, through, matchers...)
+		ids, fetcher, err := store.GetChunkRefs(ctx, userID, from, through, matchers, tags)
 		if err != nil {
 			return err
 		}

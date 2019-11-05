@@ -5,11 +5,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/cortexproject/cortex/pkg/chunk"
-	"github.com/cortexproject/cortex/pkg/chunk/encoding"
-	"github.com/cortexproject/cortex/pkg/ingester/client"
-	"github.com/cortexproject/cortex/pkg/storage/tsdb"
-	"github.com/cortexproject/cortex/pkg/util"
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
@@ -18,6 +13,12 @@ import (
 	"github.com/thanos-io/thanos/pkg/runutil"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
 	"google.golang.org/grpc/metadata"
+
+	"github.com/cortexproject/cortex/pkg/chunk"
+	"github.com/cortexproject/cortex/pkg/chunk/encoding"
+	"github.com/cortexproject/cortex/pkg/ingester/client"
+	"github.com/cortexproject/cortex/pkg/storage/tsdb"
+	"github.com/cortexproject/cortex/pkg/util"
 )
 
 // BlockQuerier is a querier of thanos blocks
@@ -62,7 +63,7 @@ func NewBlockQuerier(cfg tsdb.Config, r prometheus.Registerer) (*BlockQuerier, e
 }
 
 // Get implements the ChunkStore interface. It makes a block query and converts the response into chunks
-func (b *BlockQuerier) Get(ctx context.Context, userID string, from, through model.Time, matchers ...*labels.Matcher) ([]chunk.Chunk, error) {
+func (b *BlockQuerier) Get(ctx context.Context, userID string, from, through model.Time, matchers []*labels.Matcher, tags []*chunk.TagMatcher) ([]chunk.Chunk, error) {
 	client := b.us.client
 
 	// Convert matchers to LabelMatcher
@@ -146,13 +147,13 @@ func seriesToChunks(userID string, series *storepb.Series) []chunk.Chunk {
 			}
 
 			if overflow != nil {
-				chunks = append(chunks, chunk.NewChunk(userID, client.Fingerprint(lbls), lbls, ch, model.Time(c.MinTime), model.Time(c.MaxTime)))
+				chunks = append(chunks, chunk.NewChunk(userID, client.Fingerprint(lbls), lbls, nil, ch, model.Time(c.MinTime), model.Time(c.MaxTime)))
 				ch = overflow
 			}
 		}
 
 		if ch.Len() > 0 {
-			chunks = append(chunks, chunk.NewChunk(userID, client.Fingerprint(lbls), lbls, ch, model.Time(c.MinTime), model.Time(c.MaxTime)))
+			chunks = append(chunks, chunk.NewChunk(userID, client.Fingerprint(lbls), lbls, nil, ch, model.Time(c.MinTime), model.Time(c.MaxTime)))
 		}
 	}
 	return chunks

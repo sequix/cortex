@@ -99,12 +99,12 @@ func newSeriesStore(cfg StoreConfig, schema Schema, index IndexClient, chunks Ob
 }
 
 // Get implements Store
-func (c *seriesStore) Get(ctx context.Context, userID string, from, through model.Time, allMatchers ...*labels.Matcher) ([]Chunk, error) {
+func (c *seriesStore) Get(ctx context.Context, userID string, from, through model.Time, allMatchers []*labels.Matcher, _ []*TagMatcher) ([]Chunk, error) {
 	log, ctx := spanlogger.New(ctx, "SeriesStore.Get")
 	defer log.Span.Finish()
 	level.Debug(log).Log("from", from, "through", through, "matchers", len(allMatchers))
 
-	chks, fetchers, err := c.GetChunkRefs(ctx, userID, from, through, allMatchers...)
+	chks, fetchers, err := c.GetChunkRefs(ctx, userID, from, through, allMatchers, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func (c *seriesStore) Get(ctx context.Context, userID string, from, through mode
 	return filteredChunks, nil
 }
 
-func (c *seriesStore) GetChunkRefs(ctx context.Context, userID string, from, through model.Time, allMatchers ...*labels.Matcher) ([][]Chunk, []*Fetcher, error) {
+func (c *seriesStore) GetChunkRefs(ctx context.Context, userID string, from, through model.Time, allMatchers []*labels.Matcher, _ []*TagMatcher) ([][]Chunk, []*Fetcher, error) {
 	log, ctx := spanlogger.New(ctx, "SeriesStore.GetChunkRefs")
 	defer log.Span.Finish()
 
