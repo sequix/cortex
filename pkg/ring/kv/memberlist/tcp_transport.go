@@ -585,8 +585,9 @@ func (t *TCPTransport) registerMetrics() {
 		t.unknownConnections,
 	}
 
+	// todo register metrics
 	// if registration fails, that's too bad, but don't panic
 	for _, c := range all {
-		t.cfg.MetricsRegisterer.MustRegister(c.(prometheus.Collector))
+		t.cfg.MetricsRegisterer.Register(c.(prometheus.Collector))
 	}
 }
