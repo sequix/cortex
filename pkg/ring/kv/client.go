@@ -106,6 +106,7 @@ func NewClient(cfg Config, codec codec.Codec) (Client, error) {
 
 	case "memberlist":
 		cfg.Memberlist.MetricsRegisterer = prometheus.DefaultRegisterer
+		cfg.Memberlist.MetricsNamespace = "cortex_memberlist"
 		client, err = memberlist.NewMemberlistClient(cfg.Memberlist, codec)
 
 	default:
