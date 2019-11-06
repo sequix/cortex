@@ -49,8 +49,8 @@ type Config struct {
 	TCPTransport TCPTransportConfig `yaml:",inline"`
 
 	// Where to put custom metrics. Metrics are not registered, if this is nil.
-	MetricsRegisterer prometheus.Registerer
-	MetricsNamespace  string
+	MetricsRegisterer prometheus.Registerer `yaml:"-"`
+	MetricsNamespace  string                `yaml:"-"`
 }
 
 // RegisterFlags registers flags.
