@@ -17,7 +17,7 @@ import (
 var (
 	// Logger is a shared go-kit logger.
 	// TODO: Change all components to take a non-global logger via their constructors.
-	Logger = log.NewNopLogger()
+	Logger = log.NewJSONLogger(os.Stdout)
 
 	logMessages = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "log_messages_total",
